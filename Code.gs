@@ -107,6 +107,7 @@ function register_(p) {
   const username = clean_(p.username).toLowerCase(), password = String(p.password || '');
   const role = normalizeRole_(p.role);
   if (role === 'PARENT') throw new Error('ยกเลิกการสมัครด้วยบทบาทบิดา มารดา หรือผู้ปกครองเด็กแล้ว');
+  if (role === 'OTHER') throw new Error('ยกเลิกการสมัครด้วยบทบาทอื่นๆ แล้ว');
   if (role === 'VHV' && !clean_(p.villageNo)) throw new Error('กรุณาระบุหมู่บ้านที่รับผิดชอบสำหรับ อสม.');
   if (!/^[a-z0-9._-]{3,40}$/.test(username)) throw new Error('ชื่อผู้ใช้ต้องเป็น a-z, 0-9, จุด, ขีดกลาง หรือขีดล่าง จำนวน 3-40 ตัว');
   if (password.length < 6) throw new Error('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร');
@@ -139,6 +140,7 @@ function login_(p) {
   if (!isTrue_(user.ACTIVE)) throw new Error('บัญชียังไม่ได้รับอนุมัติจากผู้ดูแลระบบ');
   const role = normalizeRole_(user.ROLE);
   if (role === 'PARENT') throw new Error('บทบาทบิดา มารดา หรือผู้ปกครองเด็กถูกยกเลิก กรุณาติดต่อผู้ดูแลระบบ');
+  if (role === 'OTHER') throw new Error('บทบาทอื่นๆ ถูกยกเลิก กรุณาติดต่อผู้ดูแลระบบ');
   const token = Utilities.getUuid() + Utilities.getUuid();
   const session = { userId: user.USER_ID, username: user.USERNAME, displayName: user.DISPLAY_NAME, role: role, villageNo: clean_(user.VILLAGE_NO), otherRole: clean_(user.OTHER_ROLE) };
   CacheService.getScriptCache().put('session:' + token, JSON.stringify(session), 21600);
@@ -286,6 +288,7 @@ function saveUser_(p) {
   if (!/^[a-z0-9._-]{3,40}$/.test(username)) throw new Error('ชื่อผู้ใช้ต้องเป็น a-z, 0-9, จุด, ขีดกลาง หรือขีดล่าง จำนวน 3-40 ตัว');
   normalizeRole_(role);
   if (role === 'PARENT') throw new Error('ไม่สามารถกำหนดบทบาทบิดา มารดา หรือผู้ปกครองเด็กได้');
+  if (role === 'OTHER') throw new Error('ไม่สามารถกำหนดบทบาทอื่นๆ ได้');
   if (role === 'VHV' && !clean_(p.VILLAGE_NO)) throw new Error('กรุณาระบุหมู่บ้านที่รับผิดชอบสำหรับ อสม.');
   if (role === 'OTHER' && !clean_(p.OTHER_ROLE)) throw new Error('กรุณาระบุบทบาทอื่นๆ');
   const users = rowsAsObjects_('USERS');
