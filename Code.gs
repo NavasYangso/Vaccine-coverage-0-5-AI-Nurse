@@ -78,6 +78,8 @@ function route_(action, payload) {
     health: function () { return { status: 'ready', now: new Date() }; },
     login: login_,
     register: register_,
+    requestPasswordReset: requestPasswordReset_,
+    resetPassword: resetPassword_,
     changePassword: changePassword_,
     saveUser: saveUser_,
     bootstrap: getBootstrapData_,
@@ -88,14 +90,11 @@ function route_(action, payload) {
     generateAppointments: generateMissingAppointments
   };
   if (!routes[action]) throw new Error('ไม่พบ action: ' + action);
-  if (['health', 'login', 'register'].indexOf(action) < 0) {
+  if (['health', 'login', 'register', 'requestPasswordReset', 'resetPassword'].indexOf(action) < 0) {
     const session = requireAuth_(payload);
     if (action === 'saveUser') requireRole_(session, ['ADMIN']);
-    if (['saveChild', 'saveVaccination', 'bulkImport', 'generateAppointments'].indexOf(action) >= 0) requireRole_(session, ['ADMIN', 'PUBLIC_HEALTH', 'DATA_ENTRY', 'EDITOR']);
-    if (action === 'saveFollowUp') {
-      requireRole_(session, ['ADMIN', 'PUBLIC_HEALTH', 'DATA_ENTRY', 'EDITOR', 'VHV']);
-      if (String(session.role).toUpperCase() === 'VHV') assertVillageAccess_(session, payload.CHILD_ID);
-    }
+    if (['saveChild', 'saveVaccination', 'generateAppointments'].indexOf(action) >= 0) requireRole_(session, ['ADMIN', 'PUBLIC_HEALTH', 'DATA_ENTRY', 'EDITOR']);
+    if (['bulkImport', 'saveFollowUp'].indexOf(action) >= 0) requireRole_(session, ['ADMIN', 'PUBLIC_HEALTH']);
   }
   return routes[action](payload || {});
 }
@@ -139,6 +138,54 @@ function login_(p) {
   CacheService.getScriptCache().put('session:' + token, JSON.stringify(session), 21600);
   audit_('LOGIN', 'USERS', user.USER_ID, user.USERNAME);
   return { token: token, user: session, expiresIn: 21600 };
+}
+
+function requestPasswordReset_(p) {
+  const username = clean_(p.username).toLowerCase(), email = clean_(p.email).toLowerCase();
+  if (!username || !email) throw new Error('กรุณาระบุชื่อผู้ใช้และอีเมล');
+  const generic = { sent: true, message: 'หากข้อมูลถูกต้อง ระบบจะส่งรหัสยืนยันไปยังอีเมลที่ลงทะเบียน' };
+  const user = rowsAsObjects_('USERS').find(function (u) {
+    return clean_(u.USERNAME).toLowerCase() === username && clean_(u.EMAIL).toLowerCase() === email && isTrue_(u.ACTIVE);
+  });
+  if (!user) { Utilities.sleep(350); return generic; }
+  const cache = CacheService.getScriptCache(), rateKey = 'reset-rate:' + username;
+  if (cache.get(rateKey)) throw new Error('เพิ่งส่งรหัสไปแล้ว กรุณารอประมาณ 1 นาทีก่อนขอใหม่');
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const salt = Utilities.getUuid().replace(/-/g, '');
+  cache.put('reset:' + username, JSON.stringify({ email: email, hash: passwordHash_(code, salt), salt: salt, attempts: 0 }), 600);
+  cache.put(rateKey, '1', 60);
+  MailApp.sendEmail({
+    to: user.EMAIL,
+    subject: 'รหัสยืนยันสำหรับตั้งรหัสผ่านใหม่',
+    htmlBody: '<p>เรียน ' + escapeHtml_(user.DISPLAY_NAME || user.USERNAME) + '</p><p>รหัสยืนยันของคุณคือ</p><p style="font-size:28px;font-weight:bold;letter-spacing:5px">' + code + '</p><p>รหัสนี้มีอายุ 10 นาที หากไม่ได้เป็นผู้ขอ โปรดละเว้นอีเมลฉบับนี้</p>',
+    name: 'ระบบติดตามความครอบคลุมวัคซีนเด็ก 0-5 ปี'
+  });
+  audit_('REQUEST_PASSWORD_RESET', 'USERS', user.USER_ID, username);
+  return generic;
+}
+
+function resetPassword_(p) {
+  const username = clean_(p.username).toLowerCase(), email = clean_(p.email).toLowerCase();
+  const code = clean_(p.code), newPassword = String(p.newPassword || '');
+  if (!username || !email || !code) throw new Error('กรุณากรอกข้อมูลและรหัสยืนยันให้ครบ');
+  if (newPassword.length < 6) throw new Error('รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร');
+  const cache = CacheService.getScriptCache(), key = 'reset:' + username, raw = cache.get(key);
+  if (!raw) throw new Error('รหัสยืนยันหมดอายุ กรุณาขอรหัสใหม่');
+  const reset = JSON.parse(raw);
+  if (reset.email !== email || passwordHash_(code, reset.salt) !== reset.hash) {
+    reset.attempts = Number(reset.attempts || 0) + 1;
+    if (reset.attempts >= 5) cache.remove(key); else cache.put(key, JSON.stringify(reset), 600);
+    throw new Error('รหัสยืนยันไม่ถูกต้อง');
+  }
+  const found = rowsAsObjects_('USERS').find(function (u) { return clean_(u.USERNAME).toLowerCase() === username && clean_(u.EMAIL).toLowerCase() === email && isTrue_(u.ACTIVE); });
+  if (!found) throw new Error('ไม่สามารถตั้งรหัสผ่านใหม่ได้');
+  const salt = Utilities.getUuid().replace(/-/g, '');
+  found.PASSWORD_SALT = salt;
+  found.PASSWORD_HASH = passwordHash_(newPassword, salt);
+  upsertObject_('USERS', 'USER_ID', found);
+  cache.remove(key);
+  audit_('RESET_PASSWORD', 'USERS', found.USER_ID, username);
+  return { changed: true };
 }
 
 function requireAuth_(p) {
@@ -205,12 +252,13 @@ function getBootstrapData_(p) {
   if (['PARENT', 'OTHER'].indexOf(role) >= 0) { records = []; followups = []; }
   const coverageDefinitions = rowsAsObjects_('COVERAGE_DEFINITIONS').filter(function (r) { return isTrue_(r.ACTIVE); });
   const coverageTargets = rowsAsObjects_('COVERAGE_TARGETS');
+  const canTrack = ['ADMIN', 'PUBLIC_HEALTH'].indexOf(role) >= 0;
   const response = {
     children: children,
     schedule: schedule,
     records: records,
     followups: followups,
-    tracker: buildTracker_(children, schedule, records, followups),
+    tracker: canTrack ? buildTracker_(children, schedule, records, followups) : [],
     coverage: buildCoverage_(allChildren, rowsAsObjects_('VACCINE_RECORDS'), coverageDefinitions, coverageTargets),
     coverageDefinitions: coverageDefinitions,
     coverageTargets: coverageTargets,
@@ -667,6 +715,12 @@ function currentUser_() { return Session.getActiveUser().getEmail() || 'webapp-u
 function passwordHash_(password, salt) {
   const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(salt) + String(password), Utilities.Charset.UTF_8);
   return bytes.map(function (b) { const v = b < 0 ? b + 256 : b; return ('0' + v.toString(16)).slice(-2); }).join('');
+}
+
+function escapeHtml_(value) {
+  return String(value || '').replace(/[&<>"']/g, function (c) {
+    return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
+  });
 }
 function parseDate_(v) { const d = v instanceof Date ? new Date(v) : new Date(String(v)); if (isNaN(d.getTime())) throw new Error('รูปแบบวันที่ไม่ถูกต้อง: ' + v); return stripTime_(d); }
 function parseDateOrBlank_(v) { return v ? parseDate_(v) : ''; }
