@@ -97,7 +97,8 @@ function route_(action, payload) {
     if (action === 'saveUser') requireRole_(session, ['ADMIN']);
     if (action === 'saveChild') requireRole_(session, ['ADMIN', 'PUBLIC_HEALTH', 'DATA_ENTRY', 'EDITOR', 'VHV']);
     if (['saveVaccination', 'generateAppointments'].indexOf(action) >= 0) requireRole_(session, ['ADMIN', 'PUBLIC_HEALTH', 'DATA_ENTRY', 'EDITOR']);
-    if (['bulkImport', 'saveFollowUp'].indexOf(action) >= 0) requireRole_(session, ['ADMIN', 'PUBLIC_HEALTH']);
+    if (action === 'bulkImport') requireRole_(session, ['ADMIN', 'PUBLIC_HEALTH']);
+    if (action === 'saveFollowUp') requireRole_(session, ['ADMIN', 'PUBLIC_HEALTH', 'VHV']);
   }
   return routes[action](payload || {});
 }
@@ -261,7 +262,7 @@ function getBootstrapData_(p) {
   const coverageDefinitions = rowsAsObjects_('COVERAGE_DEFINITIONS').filter(function (r) { return isTrue_(r.ACTIVE); });
   let coverageTargets = rowsAsObjects_('COVERAGE_TARGETS');
   if (role === 'VHV') coverageTargets = coverageTargets.filter(function (t) { return clean_(t.VILLAGE_NO) === clean_(session.villageNo); });
-  const canTrack = ['ADMIN', 'PUBLIC_HEALTH'].indexOf(role) >= 0;
+  const canTrack = ['ADMIN', 'PUBLIC_HEALTH', 'VHV'].indexOf(role) >= 0;
   const scopedTracker = buildTracker_(children, schedule, records, followups);
   const response = {
     children: children,
@@ -363,6 +364,8 @@ function saveVaccination_(p) {
 
 function saveFollowUp_(p) {
   assertRequired_(p, ['CHILD_ID', 'FOLLOWUP_DATE', 'METHOD', 'RESULT']);
+  const session = p._session || {}, role = normalizeRole_(session.role);
+  if (role === 'VHV') assertVillageAccess_(session, p.CHILD_ID);
   const row = {
     FOLLOWUP_ID: makeId_('FU'), CHILD_ID: p.CHILD_ID, SCHEDULE_ID: clean_(p.SCHEDULE_ID),
     FOLLOWUP_DATE: parseDate_(p.FOLLOWUP_DATE), METHOD: clean_(p.METHOD), RESULT: clean_(p.RESULT),
