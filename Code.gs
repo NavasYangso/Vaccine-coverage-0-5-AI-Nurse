@@ -262,12 +262,14 @@ function getBootstrapData_(p) {
   let coverageTargets = rowsAsObjects_('COVERAGE_TARGETS');
   if (role === 'VHV') coverageTargets = coverageTargets.filter(function (t) { return clean_(t.VILLAGE_NO) === clean_(session.villageNo); });
   const canTrack = ['ADMIN', 'PUBLIC_HEALTH'].indexOf(role) >= 0;
+  const scopedTracker = buildTracker_(children, schedule, records, followups);
   const response = {
     children: children,
     schedule: schedule,
     records: records,
     followups: followups,
-    tracker: canTrack ? buildTracker_(children, schedule, records, followups) : [],
+    tracker: canTrack ? scopedTracker : [],
+    villageSummary: buildVillageSummary_(children, scopedTracker),
     coverage: buildCoverage_(role === 'VHV' ? children : allChildren, role === 'VHV' ? records : rowsAsObjects_('VACCINE_RECORDS'), coverageDefinitions, coverageTargets),
     coverageDefinitions: coverageDefinitions,
     coverageTargets: coverageTargets,
@@ -514,6 +516,28 @@ function buildTracker_(children, schedule, records, followups) {
       latestFollowup: latest ? { date: formatDate_(latest.FOLLOWUP_DATE), result: latest.RESULT } : null
     };
   }).sort(function (a, b) { return new Date(a.appointmentDate) - new Date(b.appointmentDate); });
+}
+
+function buildVillageSummary_(children, tracker) {
+  const summary = {};
+  children.forEach(function (c) {
+    const village = clean_(c.VILLAGE_NO) || 'ไม่ระบุ';
+    if (!summary[village]) summary[village] = { village: village, children: 0, dueSoon: 0, missed: 0, urgent: 0, chronic: 0 };
+    summary[village].children++;
+  });
+  tracker.forEach(function (r) {
+    const village = clean_(r.village) || 'ไม่ระบุ';
+    if (!summary[village]) summary[village] = { village: village, children: 0, dueSoon: 0, missed: 0, urgent: 0, chronic: 0 };
+    if (r.status === 'DUE_SOON') summary[village].dueSoon++;
+    else if (r.status === 'MISSED') summary[village].missed++;
+    else if (r.status === 'URGENT') summary[village].urgent++;
+    else if (r.status === 'CHRONIC') summary[village].chronic++;
+  });
+  return Object.keys(summary).sort(function (a, b) {
+    const an = Number(a), bn = Number(b);
+    if (!isNaN(an) && !isNaN(bn)) return an - bn;
+    return String(a).localeCompare(String(b), 'th');
+  }).map(function (key) { return summary[key]; });
 }
 
 /** สรุปความครอบคลุมให้ตรงโครงสร้างไฟล์อ้างอิง: เป้าหมาย / ได้รับวัคซีน / ร้อยละ */
