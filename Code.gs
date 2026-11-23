@@ -17,7 +17,7 @@ const APP = {
     COVERAGE_DEFINITIONS: ['COVERAGE_ID', 'AGE_GROUP', 'COVERAGE_LABEL', 'SOURCE_SCHEDULE_IDS', 'MATCH_MODE', 'SORT_ORDER', 'ACTIVE'],
     VACCINE_RECORDS: ['RECORD_ID', 'CHILD_ID', 'SCHEDULE_ID', 'VACCINE_CODE', 'DOSE', 'DUE_DATE', 'APPOINTMENT_DATE', 'GIVEN_DATE', 'SERVICE_PLACE', 'LOT_NO', 'DATA_SOURCE', 'RECORDED_BY', 'NOTE', 'CREATED_AT', 'UPDATED_AT'],
     FOLLOW_UP: ['FOLLOWUP_ID', 'CHILD_ID', 'SCHEDULE_ID', 'FOLLOWUP_DATE', 'METHOD', 'RESULT', 'REASON', 'NEW_APPOINTMENT_DATE', 'NEXT_FOLLOWUP_DATE', 'ASSIGNED_TO', 'RECORDED_BY', 'NOTE', 'CREATED_AT'],
-    USERS: ['USER_ID', 'EMAIL', 'DISPLAY_NAME', 'ROLE', 'VILLAGE_NO', 'ACTIVE', 'CREATED_AT', 'USERNAME', 'PASSWORD_HASH', 'PASSWORD_SALT', 'APPROVAL_STATUS', 'REQUESTED_AT', 'OTHER_ROLE'],
+    USERS: ['USER_ID', 'EMAIL', 'DISPLAY_NAME', 'ROLE', 'VILLAGE_NO', 'ACTIVE', 'CREATED_AT', 'USERNAME', 'PASSWORD_HASH', 'PASSWORD_SALT', 'APPROVAL_STATUS', 'REQUESTED_AT', 'OTHER_ROLE', 'PHONE'],
     IMPORT_LOG: ['IMPORT_ID', 'TIMESTAMP', 'USER_EMAIL', 'IMPORT_TYPE', 'TOTAL_ROWS', 'SUCCESS_ROWS', 'ERROR_ROWS', 'ERROR_DETAIL'],
     AUDIT_LOG: ['LOG_ID', 'TIMESTAMP', 'USER_EMAIL', 'ACTION', 'ENTITY', 'ENTITY_ID', 'DETAIL']
   }
@@ -104,25 +104,27 @@ function route_(action, payload) {
 }
 
 function register_(p) {
-  assertRequired_(p, ['username', 'password', 'displayName', 'role']);
+  assertRequired_(p, ['username', 'password', 'displayName', 'email', 'phone', 'role', 'villageNo']);
   const username = clean_(p.username).toLowerCase(), password = String(p.password || '');
   const role = normalizeRole_(p.role);
   if (role === 'PARENT') throw new Error('ยกเลิกการสมัครด้วยบทบาทบิดา มารดา หรือผู้ปกครองเด็กแล้ว');
   if (role === 'OTHER') throw new Error('ยกเลิกการสมัครด้วยบทบาทอื่นๆ แล้ว');
   if (role === 'VHV' && !clean_(p.villageNo)) throw new Error('กรุณาระบุหมู่บ้านที่รับผิดชอบสำหรับ อสม.');
   if (!/^[a-z0-9._-]{3,40}$/.test(username)) throw new Error('ชื่อผู้ใช้ต้องเป็น a-z, 0-9, จุด, ขีดกลาง หรือขีดล่าง จำนวน 3-40 ตัว');
-  if (password.length < 6) throw new Error('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร');
+  if (!isStrongPassword_(password)) throw new Error('รหัสผ่านต้องมีอย่างน้อย 8 ตัว และประกอบด้วยตัวพิมพ์ใหญ่ ตัวพิมพ์เล็ก ตัวเลข และอักขระพิเศษ');
   const users = rowsAsObjects_('USERS');
   if (users.some(function (u) { return clean_(u.USERNAME).toLowerCase() === username; })) throw new Error('ชื่อผู้ใช้นี้มีอยู่แล้ว');
-  const email = clean_(p.email);
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('รูปแบบอีเมลไม่ถูกต้อง');
+  const email = clean_(p.email).toLowerCase();
+  const phone = clean_(p.phone).replace(/[\s-]/g, '');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('รูปแบบอีเมลไม่ถูกต้อง');
+  if (!/^0\d{8,9}$/.test(phone)) throw new Error('เบอร์โทรต้องเป็นตัวเลข 9-10 หลักและขึ้นต้นด้วย 0');
   const salt = Utilities.getUuid().replace(/-/g, '');
   if (role === 'OTHER' && !clean_(p.otherRole)) throw new Error('กรุณาระบุบทบาทอื่นๆ');
   const row = {
     USER_ID: makeId_('US'), EMAIL: email, DISPLAY_NAME: clean_(p.displayName), ROLE: role,
     VILLAGE_NO: clean_(p.villageNo), ACTIVE: false, CREATED_AT: new Date(), USERNAME: username,
     PASSWORD_HASH: passwordHash_(password, salt), PASSWORD_SALT: salt,
-    APPROVAL_STATUS: 'PENDING', REQUESTED_AT: new Date(), OTHER_ROLE: clean_(p.otherRole)
+    APPROVAL_STATUS: 'PENDING', REQUESTED_AT: new Date(), OTHER_ROLE: clean_(p.otherRole), PHONE: phone
   };
   appendObject_('USERS', row);
   audit_('REGISTER_REQUEST', 'USERS', row.USER_ID, username);
@@ -279,7 +281,7 @@ function getBootstrapData_(p) {
   };
   if (String(session.role).toUpperCase() === 'ADMIN') {
     response.users = rowsAsObjects_('USERS').map(function (u) {
-      return { USER_ID: u.USER_ID, USERNAME: u.USERNAME, EMAIL: u.EMAIL, DISPLAY_NAME: u.DISPLAY_NAME, ROLE: normalizeRole_(u.ROLE), OTHER_ROLE: u.OTHER_ROLE, VILLAGE_NO: u.VILLAGE_NO, ACTIVE: isTrue_(u.ACTIVE), APPROVAL_STATUS: u.APPROVAL_STATUS || (isTrue_(u.ACTIVE) ? 'APPROVED' : 'PENDING'), CREATED_AT: u.CREATED_AT, REQUESTED_AT: u.REQUESTED_AT };
+      return { USER_ID: u.USER_ID, USERNAME: u.USERNAME, EMAIL: u.EMAIL, PHONE: u.PHONE, DISPLAY_NAME: u.DISPLAY_NAME, ROLE: normalizeRole_(u.ROLE), OTHER_ROLE: u.OTHER_ROLE, VILLAGE_NO: u.VILLAGE_NO, ACTIVE: isTrue_(u.ACTIVE), APPROVAL_STATUS: u.APPROVAL_STATUS || (isTrue_(u.ACTIVE) ? 'APPROVED' : 'PENDING'), CREATED_AT: u.CREATED_AT, REQUESTED_AT: u.REQUESTED_AT };
     });
   }
   return response;
@@ -305,7 +307,7 @@ function saveUser_(p) {
   let salt = old.PASSWORD_SALT || '', hash = old.PASSWORD_HASH || '';
   if (password) { salt = Utilities.getUuid().replace(/-/g, ''); hash = passwordHash_(password, salt); }
   const row = {
-    USER_ID: old.USER_ID || makeId_('US'), EMAIL: clean_(p.EMAIL) || old.EMAIL || '', DISPLAY_NAME: clean_(p.DISPLAY_NAME), ROLE: role,
+    USER_ID: old.USER_ID || makeId_('US'), EMAIL: clean_(p.EMAIL) || old.EMAIL || '', PHONE: clean_(p.PHONE) || old.PHONE || '', DISPLAY_NAME: clean_(p.DISPLAY_NAME), ROLE: role,
     VILLAGE_NO: clean_(p.VILLAGE_NO), ACTIVE: p.ACTIVE === false || String(p.ACTIVE).toLowerCase() === 'false' ? false : true,
     CREATED_AT: old.CREATED_AT || new Date(), USERNAME: username, PASSWORD_HASH: hash, PASSWORD_SALT: salt,
     APPROVAL_STATUS: p.ACTIVE === false || String(p.ACTIVE).toLowerCase() === 'false' ? 'PENDING' : 'APPROVED', REQUESTED_AT: old.REQUESTED_AT || new Date(), OTHER_ROLE: clean_(p.OTHER_ROLE)
@@ -319,8 +321,10 @@ function saveChild_(p) {
   assertRequired_(p, ['FIRST_NAME', 'LAST_NAME', 'BIRTH_DATE']);
   const session = p._session || {}, role = normalizeRole_(session.role);
   const now = new Date();
-  const id = p.CHILD_ID || makeId_('CH');
+  const originalId = clean_(p.ORIGINAL_CHILD_ID);
+  const id = originalId || clean_(p.CHILD_ID) || makeId_('CH');
   const existing = findRow_('CHILDREN', 'CHILD_ID', id);
+  if (originalId && !existing) throw new Error('ไม่พบข้อมูลเด็กเดิม ระบบจึงยกเลิกการบันทึกเพื่อป้องกันข้อมูลซ้ำ กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง');
   if (role === 'VHV') {
     if (!clean_(session.villageNo)) throw new Error('บัญชี อสม. ยังไม่ได้ระบุหมู่บ้านที่รับผิดชอบ กรุณาติดต่อผู้ดูแลระบบ');
     if (existing) assertVillageAccess_(session, id);
@@ -682,7 +686,7 @@ function seedAdmin_() {
     EMAIL: previousAdmin ? previousAdmin.EMAIL : currentUser_(), DISPLAY_NAME: previousAdmin ? previousAdmin.DISPLAY_NAME : 'ผู้ดูแลระบบ',
     ROLE: 'ADMIN', VILLAGE_NO: previousAdmin ? previousAdmin.VILLAGE_NO : '', ACTIVE: true,
     CREATED_AT: previousAdmin ? previousAdmin.CREATED_AT : new Date(), USERNAME: 'admin',
-    PASSWORD_HASH: passwordHash_('admin', salt), PASSWORD_SALT: salt, APPROVAL_STATUS: 'APPROVED', REQUESTED_AT: new Date(), OTHER_ROLE: ''
+    PASSWORD_HASH: passwordHash_('admin', salt), PASSWORD_SALT: salt, APPROVAL_STATUS: 'APPROVED', REQUESTED_AT: new Date(), OTHER_ROLE: '', PHONE: previousAdmin ? previousAdmin.PHONE : ''
   };
   upsertObject_('USERS', 'USER_ID', row);
 }
@@ -761,6 +765,11 @@ function currentUser_() { return Session.getActiveUser().getEmail() || 'webapp-u
 function passwordHash_(password, salt) {
   const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(salt) + String(password), Utilities.Charset.UTF_8);
   return bytes.map(function (b) { const v = b < 0 ? b + 256 : b; return ('0' + v.toString(16)).slice(-2); }).join('');
+}
+
+function isStrongPassword_(password) {
+  const value = String(password || '');
+  return value.length >= 8 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9\s]/.test(value);
 }
 
 function escapeHtml_(value) {
